@@ -47,6 +47,27 @@ def parse_args():
 # 2. Data loading and preprocessing
 # ---------------------------------------------------------------------------
 
+STOP_WORDS = frozenset([
+    'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+    'should', 'may', 'might', 'shall', 'can', 'need', 'dare', 'ought',
+    'am', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from',
+    'as', 'into', 'through', 'during', 'before', 'after', 'above',
+    'below', 'between', 'out', 'off', 'over', 'under', 'again',
+    'further', 'then', 'once', 'and', 'but', 'or', 'nor', 'not', 'so',
+    'yet', 'both', 'either', 'neither', 'each', 'every', 'all', 'any',
+    'few', 'more', 'most', 'other', 'some', 'such', 'no', 'only',
+    'own', 'same', 'than', 'too', 'very', 'just', 'because', 'if',
+    'when', 'where', 'how', 'what', 'which', 'who', 'whom', 'this',
+    'that', 'these', 'those', 'i', 'me', 'my', 'myself', 'we', 'our',
+    'ours', 'ourselves', 'you', 'your', 'yours', 'yourself', 'he',
+    'him', 'his', 'himself', 'she', 'her', 'hers', 'herself', 'it',
+    'its', 'itself', 'they', 'them', 'their', 'theirs', 'themselves',
+    'here', 'there', 'about', 'up', 'also', 'well', 'back', 'even',
+    'still', 'much', 'get', 'got', 'go', 'going', 'make', 'made',
+])
+
+
 def clean_text(text):
     """Lowercase, remove punctuation/special chars, strip whitespace."""
     text = text.lower()
@@ -56,8 +77,8 @@ def clean_text(text):
 
 
 def tokenize(text):
-    """Split cleaned text into word tokens."""
-    return text.split()
+    """Split cleaned text into word tokens, removing stop words."""
+    return [w for w in text.split() if w not in STOP_WORDS]
 
 
 def load_data(filepath):
@@ -233,7 +254,7 @@ def train_knn(train_set):
 
 
 def predict_knn(tokens, training_vectors, k=5):
-    """Predict class using KNN with cosine similarity."""
+    """Predict class using distance-weighted KNN with cosine similarity."""
     query_bow = doc_to_bow(tokens)
 
     # Compute similarities to all training documents
@@ -246,13 +267,39 @@ def predict_knn(tokens, training_vectors, k=5):
     similarities.sort(key=lambda x: x[0], reverse=True)
     top_k = similarities[:k]
 
-    # Majority vote
+    # Distance-weighted vote: each neighbor's vote is weighted by similarity
     votes = {}
-    for _, label in top_k:
-        votes[label] = votes.get(label, 0) + 1
+    for sim, label in top_k:
+        votes[label] = votes.get(label, 0) + sim
 
     predicted = max(votes, key=votes.get)
     return predicted
+
+
+def find_best_k(train_set, vocab, k_values=(1, 3, 5, 7, 9, 11, 15)):
+    """Find best k using leave-out validation on last 20% of training set."""
+    n = len(train_set)
+    split = int(n * 0.80)
+    sub_train = train_set[:split]
+    sub_val = train_set[split:]
+
+    sub_vectors = train_knn(sub_train)
+
+    best_k = k_values[0]
+    best_acc = 0.0
+
+    for k in k_values:
+        correct = 0
+        for tokens, label in sub_val:
+            pred = predict_knn(tokens, sub_vectors, k=k)
+            if pred == label:
+                correct += 1
+        acc = correct / len(sub_val) if sub_val else 0
+        if acc > best_acc:
+            best_acc = acc
+            best_k = k
+
+    return best_k
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +390,10 @@ def main():
     print("\nTraining classifier...")
     if algo == 0:
         model = train_naive_bayes(train_set, vocab)
+        best_k = None
     else:
+        best_k = find_best_k(train_set, vocab)
+        print(f"Best k found: {best_k}")
         training_vectors = train_knn(train_set)
 
     # Test
@@ -354,7 +404,7 @@ def main():
         if algo == 0:
             pred, _ = predict_naive_bayes(tokens, model)
         else:
-            pred = predict_knn(tokens, training_vectors, k=5)
+            pred = predict_knn(tokens, training_vectors, k=best_k)
         predictions.append(pred)
         actuals.append(label)
 
@@ -375,7 +425,7 @@ def main():
             print(f"  P(Positive | S) = {probs.get(1, 0.0):.4f}")
             print(f"  P(Negative | S) = {probs.get(-1, 0.0):.4f}")
         else:
-            pred = predict_knn(tokens, training_vectors, k=5)
+            pred = predict_knn(tokens, training_vectors, k=best_k)
             print(f"  was classified as {label_name(pred)}.")
 
         response = input("\nDo you want to enter another sentence [Y/N]? ")
